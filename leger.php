@@ -227,7 +227,7 @@ function getBadgeClass($nilai) {
                                     <th rowspan="3" style="width: 100px;">NIS</th>
                                     <th colspan="12">MATA PELAJARAN</th>
                                     <th colspan="3">KETIDAKHADIRAN</th>
-                                    <th rowspan="3">EKSTRA KURIKULER</th>
+                                    <th colspan="3">EKSTRA KURIKULER</th>
                                 </tr>
                                 <tr>
                                     <th>PAIDBP</th>
@@ -245,21 +245,9 @@ function getBadgeClass($nilai) {
                                     <th rowspan="2">Sakit</th>
                                     <th rowspan="2">Izin</th>
                                     <th rowspan="2">Alpa</th>
+                                    <th rowspan="2">Pramuka</th>
                                 </tr>
-                                <tr>
-                                    <th style="width: 50px;">PAI</th>
-                                    <th style="width: 50px;">PAK</th>
-                                    <th style="width: 50px;">PPKN</th>
-                                    <th style="width: 50px;">B.IND</th>
-                                    <th style="width: 50px;">MTK</th>
-                                    <th style="width: 50px;">IPAS</th>
-                                    <th style="width: 50px;">PJOK</th>
-                                    <th style="width: 50px;">ING</th>
-                                    <th style="width: 50px;">ML</th>
-                                    <th style="width: 50px;">SR</th>
-                                    <th style="width: 50px;">GKS</th>
-                                    <th style="width: 50px;">SB</th>
-                                </tr>
+                                
                             </thead>
                             <tbody>
                                 <?php 

@@ -35,7 +35,7 @@ CREATE TABLE `ekstrakurikuler` (
   `keterangan` text DEFAULT NULL,
   `semester` enum('Ganjil','Genap') DEFAULT NULL,
   `tahun_ajaran` varchar(20) DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data untuk tabel `ekstrakurikuler`
@@ -94,7 +94,7 @@ CREATE TABLE `kehadiran` (
   `semester` enum('Ganjil','Genap') DEFAULT NULL,
   `tahun_ajaran` varchar(20) DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data untuk tabel `kehadiran`
@@ -149,7 +149,7 @@ CREATE TABLE `kelas` (
   `semester` enum('Ganjil','Genap') NOT NULL,
   `wali_kelas` varchar(100) DEFAULT NULL,
   `jumlah_siswa` int(11) DEFAULT 0
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data untuk tabel `kelas`
@@ -173,7 +173,7 @@ CREATE TABLE `mata_pelajaran` (
   `nama_mapel` varchar(100) NOT NULL,
   `nama_mapel_panjang` varchar(150) DEFAULT NULL,
   `kkm` int(11) DEFAULT 75
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data untuk tabel `mata_pelajaran`
@@ -207,7 +207,7 @@ CREATE TABLE `nilai` (
   `semester` enum('Ganjil','Genap') DEFAULT NULL,
   `tahun_ajaran` varchar(20) DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data untuk tabel `nilai`
@@ -535,7 +535,7 @@ CREATE TABLE `siswa` (
   `kelas_id` int(11) DEFAULT NULL,
   `jenis_kelamin` enum('L','P') DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data untuk tabel `siswa`
@@ -590,7 +590,7 @@ CREATE TABLE `users` (
   `nama_lengkap` varchar(100) DEFAULT NULL,
   `level` enum('admin','guru','wali_kelas') DEFAULT 'guru',
   `created_at` timestamp NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- Dumping data untuk tabel `users`
