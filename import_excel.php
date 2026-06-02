@@ -1,320 +1,401 @@
-<?php
-require 'config.php';
-
-if(!isset($_SESSION['login'])) {
-    header("Location: index.php");
-    exit;
-}
-
-$success = false;
-$error = '';
-
-if(isset($_POST['import'])) {
-    $kelas_id = $_POST['kelas_id'];
-    
-    if(!isset($_FILES['file_excel']) || $_FILES['file_excel']['error'] == 4) {
-        $error = 'Silakan pilih file Excel!';
-    } else {
-        require_once 'vendor/autoload.php';
-        
-        $file = $_FILES['file_excel']['tmp_name'];
-        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($file);
-        $worksheet = $spreadsheet->getActiveSheet();
-        $rows = $worksheet->toArray();
-        
-        $data_count = 0;
-        
-        // Data mulai dari baris 7 (index 6)
-        foreach($rows as $key => $row) {
-            // Skip header (baris 1-6)
-            if($key < 6) continue;
-            
-            // Skip baris kosong
-            if(empty($row[1])) continue;
-            
-            // SKIP jika nama berisi ":" (artinya keterangan mapel, bukan siswa)
-            if(strpos($row[1], ':') !== false) continue;
-            
-            // SKIP jika kolom NO bukan angka (artinya bukan data siswa)
-            if(!is_numeric(trim($row[0]))) continue;
-            
-            // Ambil dan validasi NISN (harus 10 digit)
-            $nisn_raw = trim($row[2]);
-            $nisn_digits = preg_replace('/[^0-9]/', '', $nisn_raw);
-            if(empty($nisn_digits) || strlen($nisn_digits) < 10) continue;
-            
-            // SANITASI DATA (PENTING: escape special characters untuk hindari SQL injection)
-            $nama_siswa = mysqli_real_escape_string($conn, trim($row[1]));
-            $nisn = mysqli_real_escape_string($conn, $nisn_raw);
-            $nis = mysqli_real_escape_string($conn, trim($row[3]));
-            
-            // Cari atau buat siswa
-            $siswa = mysqli_query($conn, "SELECT id FROM siswa WHERE nisn = '$nisn'");
-            if(mysqli_num_rows($siswa) > 0) {
-                $siswa_id = mysqli_fetch_assoc($siswa)['id'];
-            } else {
-                mysqli_query($conn, "INSERT INTO siswa SET 
-                    nisn='$nisn', 
-                    nis='$nis', 
-                    nama_siswa='$nama_siswa', 
-                    kelas_id=$kelas_id, 
-                    jenis_kelamin='L'
-                ");
-                $siswa_id = mysqli_insert_id($conn);
-            }
-            
-            // Mapping kolom Excel ke mapel_id
-            // Index: 0=NO, 1=NAMA, 2=NISN, 3=NIS, 4=PAIDBP, 5=PAKDBP, 6=PPDK, 7=BI, 8=MU, 9=IPADSI, 10=PJODK, 11=ING, 12=MLBD, 13=SR, 14=GKS, 15=SB
-            $mapel_map = [
-                4  => ['id' => 1, 'kode' => 'PAIDBP'],   // Kolom E
-                5  => ['id' => 2, 'kode' => 'PAKDBP'],   // Kolom F (KOSONG untuk siswa Muslim)
-                6  => ['id' => 3, 'kode' => 'PPDK'],     // Kolom G
-                7  => ['id' => 4, 'kode' => 'BI'],       // Kolom H - Bahasa Indonesia
-                8  => ['id' => 5, 'kode' => 'MU'],       // Kolom I - Matematika
-                9  => ['id' => 6, 'kode' => 'IPADSI'],   // Kolom J
-                10 => ['id' => 7, 'kode' => 'PJODK'],    // Kolom K
-                11 => ['id' => 8, 'kode' => 'ING'],      // Kolom L - Bahasa Inggris (bukan BI!)
-                12 => ['id' => 9, 'kode' => 'MLBD'],     // Kolom M
-                13 => ['id' => 10, 'kode' => 'SR'],      // Kolom N
-                14 => ['id' => 11, 'kode' => 'GKS'],     // Kolom O
-                15 => ['id' => 12, 'kode' => 'SB']       // Kolom P
-            ];
-            
-            foreach($mapel_map as $index => $info) {
-                $nilai = isset($row[$index]) ? trim($row[$index]) : '';
-                
-                // PENTING: Hanya insert jika nilai TIDAK KOSONG dan numeric
-                if(!empty($nilai) && is_numeric($nilai)) {
-                    $predikat = $nilai >= 90 ? 'A' : ($nilai >= 80 ? 'B' : ($nilai >= 70 ? 'C' : 'D'));
-                    
-                    $check = mysqli_query($conn, "SELECT id FROM nilai WHERE siswa_id=$siswa_id AND mapel_id={$info['id']}");
-                    if(mysqli_num_rows($check) > 0) {
-                        mysqli_query($conn, "UPDATE nilai SET nilai_angka=$nilai, predikat='$predikat' WHERE siswa_id=$siswa_id AND mapel_id={$info['id']}");
-                    } else {
-                        mysqli_query($conn, "INSERT INTO nilai SET 
-                            siswa_id=$siswa_id, 
-                            mapel_id={$info['id']}, 
-                            kelas_id=$kelas_id, 
-                            nilai_angka=$nilai, 
-                            predikat='$predikat', 
-                            semester='Ganjil', 
-                            tahun_ajaran='2025/2026'
-                        ");
-                    }
-                }
-                // Jika kosong, TIDAK insert/update (kolom tetap kosong di database)
-            }
-            
-            // Kehadiran (Kolom Q, R, S = index 16, 17, 18)
-            $sakit = isset($row[16]) ? (int)$row[16] : 0;
-            $izin = isset($row[17]) ? (int)$row[17] : 0;
-            $alpa = isset($row[18]) ? (int)$row[18] : 0;
-            $hadir = 100 - ($sakit + $izin + $alpa);
-            
-            $check = mysqli_query($conn, "SELECT id FROM kehadiran WHERE siswa_id=$siswa_id");
-            if(mysqli_num_rows($check) > 0) {
-                mysqli_query($conn, "UPDATE kehadiran SET 
-                    sakit=$sakit, 
-                    izin=$izin, 
-                    alpa=$alpa, 
-                    hadir=$hadir 
-                    WHERE siswa_id=$siswa_id"
-                );
-            } else {
-                mysqli_query($conn, "INSERT INTO kehadiran SET 
-                    siswa_id=$siswa_id, 
-                    kelas_id=$kelas_id, 
-                    sakit=$sakit, 
-                    izin=$izin, 
-                    alpa=$alpa, 
-                    hadir=$hadir, 
-                    semester='Ganjil', 
-                    tahun_ajaran='2025/2026'
-                ");
-            }
-            
-            // Ekstrakurikuler (Kolom T = index 19)
-            $ekstra_predikat = isset($row[19]) ? trim($row[19]) : 'B';
-            $check = mysqli_query($conn, "SELECT id FROM ekstrakurikuler WHERE siswa_id=$siswa_id");
-            if(mysqli_num_rows($check) > 0) {
-                mysqli_query($conn, "UPDATE ekstrakurikuler SET 
-                    predikat='$ekstra_predikat', 
-                    nama_ekstra='PRAMUKA SIAGA' 
-                    WHERE siswa_id=$siswa_id"
-                );
-            } else {
-                mysqli_query($conn, "INSERT INTO ekstrakurikuler SET 
-                    siswa_id=$siswa_id, 
-                    nama_ekstra='PRAMUKA SIAGA', 
-                    predikat='$ekstra_predikat', 
-                    semester='Ganjil', 
-                    tahun_ajaran='2025/2026'
-                ");
-            }
-            
-            $data_count++;
-        }
-        
-        if($data_count > 0) {
-            $success = true;
-            $success_msg = "✅ Import berhasil! $data_count data siswa masuk ke database.";
-        } else {
-            $error = "❌ Tidak ada data yang diimport. Pastikan format Excel sesuai!";
-        }
-    }
-}
-?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
-    <title>Import Excel - Monitoring Nilai</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Import Data Excel - SiManik</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['"Plus Jakarta Sans"', 'sans-serif'] },
+                    colors: {
+                        brand: {
+                            50: '#eff6ff', 100: '#dbeafe', 500: '#3b82f6',
+                            600: '#2563eb', 700: '#1d4ed8', 800: '#1e40af', 900: '#1e3a8a'
+                        },
+                        accent: { 400: '#fbbf24', 500: '#f59e0b', 600: '#d97706' }
+                    }
+                }
+            }
+        }
+    </script>
     <style>
-        :root {
-            --dark-navy: #0f172a;
-            --royal-blue: #1e40af;
-            --gold: #d97706;
-            --slate: #64748b;
-            --light-bg: #f1f5f9;
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .glass-header {
+            background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid rgba(226, 232, 240, 0.6);
         }
-        body { background-color: var(--light-bg); font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .sidebar {
-            background: linear-gradient(180deg, var(--dark-navy) 0%, #1e293b 100%);
-            min-height: 100vh;
-            color: white;
-        }
-        .sidebar-brand {
-            padding: 35px 25px;
-            text-align: center;
-            border-bottom: 2px solid var(--gold);
-        }
-        .sidebar-brand i { font-size: 45px; color: var(--gold); margin-bottom: 12px; }
-        .sidebar-brand h5 { font-weight: 700; font-size: 17px; }
-        .sidebar-brand small { font-size: 12px; color: var(--slate); }
-        .sidebar-menu { padding: 25px 15px; }
-        .sidebar-menu a {
-            color: rgba(255,255,255,0.85);
-            text-decoration: none;
-            padding: 15px 20px;
-            display: block;
-            margin-bottom: 8px;
-            border-radius: 8px;
-            border-left: 3px solid transparent;
-        }
-        .sidebar-menu a:hover {
-            background: rgba(255,255,255,0.1);
-            border-left-color: var(--gold);
-            padding-left: 25px;
-        }
-        .sidebar-menu a.active {
-            background: linear-gradient(90deg, var(--gold) 0%, #f59e0b 100%);
-            color: var(--dark-navy);
-            font-weight: 700;
-        }
-        .sidebar-menu a i { margin-right: 12px; width: 22px; text-align: center; }
-        .import-box {
-            background: white;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-            max-width: 800px;
-            margin: 50px auto;
-        }
-        .page-header {
-            background: linear-gradient(135deg, var(--dark-navy) 0%, var(--royal-blue) 100%);
-            color: white;
-            padding: 25px 30px;
-            border-radius: 12px;
-            margin-bottom: 30px;
-        }
-        .page-header h2 { font-weight: 700; font-size: 26px; margin: 0; }
-        .page-header h2 i { margin-right: 12px; color: var(--gold); }
-        .btn-primary {
-            background: linear-gradient(135deg, var(--royal-blue) 0%, #3b82f6 100%);
-            border: none;
-        }
+        .drag-active { border-color: #3b82f6 !important; background-color: #eff6ff !important; transform: scale(1.02); }
+        .pulse-ring { animation: pulse-ring 1.5s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite; }
+        @keyframes pulse-ring { 0% { transform: scale(0.9); opacity: 0.5; } 50% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(0.9); opacity: 0.5; } }
     </style>
 </head>
-<body>
-<div class="container-fluid">
-    <div class="row">
-        <div class="col-md-2 sidebar">
-            <div class="sidebar-brand">
-                <i class="fas fa-graduation-cap"></i>
-                <h5>MONITORING NILAI</h5>
-                <small>SDN CURUG 01</small>
-            </div>
-            <div class="sidebar-menu">
-                <a href="dashboard.php"><i class="fas fa-home"></i> Dashboard</a>
-                <a href="import_excel.php" class="active"><i class="fas fa-file-excel"></i> Import Excel</a>
-                <a href="leger.php?kelas=1"><i class="fas fa-file-alt"></i> Leger Nilai</a>
-                <a href="grafik_nilai.php"><i class="fas fa-chart-bar"></i> Grafik Nilai</a>
-                <a href="logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a>
+<body class="bg-slate-50 text-slate-800 font-sans antialiased">
+
+<div class="flex h-screen overflow-hidden">
+    <!-- Sidebar -->
+    <aside class="hidden md:flex flex-col w-72 bg-slate-900 text-white h-screen fixed z-30 shadow-2xl">
+        <div class="h-20 flex items-center px-8 border-b border-slate-800 bg-slate-950">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-brand-600 to-brand-800 flex items-center justify-center">
+                    <i class="fas fa-graduation-cap text-accent-400 text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg tracking-tight">SiManik</h1>
+                    <p class="text-[10px] text-slate-400 font-medium tracking-wider">Monitoring Nilai</p>
+                </div>
             </div>
         </div>
-        
-        <div class="col-md-10 main-content p-4">
-            <div class="page-header">
-                <h2><i class="fas fa-file-excel"></i> IMPORT DATA DARI EXCEL</h2>
-            </div>
-            
-            <div class="import-box">
-                <?php if($success): ?>
-                <div class="alert alert-success">
-                    <i class="fas fa-check-circle"></i> <?= $success_msg ?>
+        <nav class="flex-1 overflow-y-auto py-6 px-4 space-y-1">
+            <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">Menu Utama</p>
+            <a href="dashboard.php" class="flex items-center gap-4 px-4 py-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all">
+                <i class="fas fa-home w-5 text-center"></i><span class="font-medium">Dashboard</span>
+            </a>
+            <a href="#" class="flex items-center gap-4 px-4 py-3 bg-gradient-to-r from-brand-700 to-brand-600 text-white rounded-xl shadow-md shadow-brand-900/40">
+                <i class="fas fa-file-excel w-5 text-center"></i><span class="font-medium relative">Import Data <span class="absolute -top-1 -right-1 w-2 h-2 bg-accent-400 rounded-full"></span></span>
+            </a>
+            <a href="leger.php" class="flex items-center gap-4 px-4 py-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all">
+                <i class="fas fa-book-open w-5 text-center"></i><span class="font-medium">Leger Nilai</span>
+            </a>
+            <a href="grafik_nilai.php" class="flex items-center gap-4 px-4 py-3 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all">
+                <i class="fas fa-chart-pie w-5 text-center"></i><span class="font-medium">Analitik Grafik</span>
+            </a>
+        </nav>
+        <div class="p-4 border-t border-slate-800 bg-slate-950">
+            <div class="flex items-center gap-3">
+                <img src="https://ui-avatars.com/api/?name=Wali+Kelas&background=f59e0b&color=fff" class="w-9 h-9 rounded-full ring-2 ring-slate-700">
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-semibold text-white">Wali Kelas 4A</p>
+                    <p class="text-xs text-slate-500">Admin SDN Curug 01</p>
                 </div>
-                <?php endif; ?>
-                
-                <?php if($error): ?>
-                <div class="alert alert-danger">
-                    <i class="fas fa-exclamation-circle"></i> <?= $error ?>
-                </div>
-                <?php endif; ?>
-                
-                <div class="alert alert-info">
-                    <i class="fas fa-info-circle"></i> 
-                    <strong>Panduan Import:</strong>
-                    <ol class="mb-0">
-                        <li>Pastikan file Excel sesuai format (seperti f_leger_Kelas 3 B.xlsx)</li>
-                        <li>Data siswa dimulai dari baris 7</li>
-                        <li>Kolom PAKDBP boleh kosong (untuk siswa Muslim)</li>
-                        <li>Pilih kelas tujuan import</li>
-                    </ol>
-                </div>
-                
-                <form method="POST" enctype="multipart/form-data">
-                    <div class="mb-3">
-                        <label class="form-label">Pilih Kelas</label>
-                        <select name="kelas_id" class="form-select" required>
-                            <option value="">-- Pilih Kelas --</option>
-                            <option value="1">Kelas 4A</option>
-                            <option value="2">Kelas 4B</option>
-                            <option value="3">Kelas 4C</option>
-                            <option value="4">Kelas 4D</option>
-                        </select>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label class="form-label">File Excel</label>
-                        <input type="file" name="file_excel" class="form-control" accept=".xlsx,.xls" required>
-                        <small class="text-muted">Format: .xlsx atau .xls</small>
-                    </div>
-                    
-                    <div class="d-grid gap-2">
-                        <button type="submit" name="import" class="btn btn-primary btn-lg">
-                            <i class="fas fa-upload"></i> Upload & Import
-                        </button>
-                        <a href="dashboard.php" class="btn btn-secondary">
-                            <i class="fas fa-arrow-left"></i> Kembali
-                        </a>
-                    </div>
-                </form>
+                <a href="logout.php" class="text-slate-500 hover:text-red-400"><i class="fas fa-sign-out-alt"></i></a>
             </div>
         </div>
-    </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col h-screen overflow-hidden md:ml-72">
+        <!-- Header -->
+        <header class="glass-header h-16 px-6 md:px-8 flex items-center justify-between sticky top-0 z-20">
+            <div class="flex items-center gap-3">
+                <h2 class="text-lg font-bold text-slate-800">Import Data Excel</h2>
+                <span class="px-2 py-0.5 bg-brand-50 text-brand-700 rounded text-[10px] font-bold">BETA</span>
+            </div>
+            <a href="dashboard.php" class="flex items-center gap-2 text-sm text-slate-600 hover:text-brand-600 transition-colors">
+                <i class="fas fa-arrow-left text-xs"></i><span class="hidden md:inline">Kembali ke Dashboard</span>
+            </a>
+        </header>
+
+        <!-- Scrollable Content -->
+        <div class="flex-1 overflow-y-auto p-6 md:p-8 pb-20">
+            <div class="max-w-5xl mx-auto space-y-8">
+                
+                <!-- Info Banner -->
+                <div class="bg-gradient-to-r from-brand-900 to-brand-700 rounded-2xl p-6 text-white relative overflow-hidden shadow-lg shadow-brand-900/20">
+                    <div class="absolute top-0 right-0 w-48 h-48 bg-accent-500/20 rounded-full blur-3xl -mr-12 -mt-12"></div>
+                    <div class="relative z-10 flex items-start gap-4">
+                        <div class="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center flex-shrink-0 backdrop-blur-sm">
+                            <i class="fas fa-info-circle text-accent-400 text-xl"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-lg mb-2">Panduan Import Data</h3>
+                            <ul class="space-y-2 text-brand-100 text-sm">
+                                <li class="flex items-start gap-2"><i class="fas fa-check-circle mt-0.5 text-accent-400"></i> Pastikan file Excel sesuai format (seperti leger kelas)</li>
+                                <li class="flex items-start gap-2"><i class="fas fa-check-circle mt-0.5 text-accent-400"></i> Data siswa dimulai dari <strong class="text-white">baris ke-7</strong></li>
+                                <li class="flex items-start gap-2"><i class="fas fa-check-circle mt-0.5 text-accent-400"></i> Kolom PAKDBP boleh kosong (untuk siswa Muslim)</li>
+                                <li class="flex items-start gap-2"><i class="fas fa-check-circle mt-0.5 text-accent-400"></i> Pilih kelas tujuan sebelum upload file</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <!-- Upload Form -->
+                    <div class="lg:col-span-2 space-y-6">
+                        <form id="importForm" action="import_excel.php" method="POST" enctype="multipart/form-data" class="space-y-6">
+                            
+                            <!-- Kelas Selector -->
+                            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                                <label class="block text-sm font-semibold text-slate-700 mb-3">
+                                    <i class="fas fa-chalkboard-teacher text-brand-600 mr-2"></i>Pilih Kelas Tujuan
+                                </label>
+                                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                    <label class="cursor-pointer">
+                                        <input type="radio" name="kelas_id" value="1" class="hidden peer" checked>
+                                        <div class="peer-checked:border-brand-500 peer-checked:bg-brand-50 peer-checked:text-brand-700 border border-slate-200 rounded-xl p-4 text-center hover:border-brand-300 transition-all">
+                                            <i class="fas fa-school text-lg mb-1 block opacity-50 peer-checked:opacity-100"></i>
+                                            <span class="font-bold text-sm">Kelas 4A</span>
+                                        </div>
+                                    </label>
+                                    <label class="cursor-pointer">
+                                        <input type="radio" name="kelas_id" value="2" class="hidden peer">
+                                        <div class="peer-checked:border-brand-500 peer-checked:bg-brand-50 peer-checked:text-brand-700 border border-slate-200 rounded-xl p-4 text-center hover:border-brand-300 transition-all">
+                                            <i class="fas fa-school text-lg mb-1 block opacity-50 peer-checked:opacity-100"></i>
+                                            <span class="font-bold text-sm">Kelas 4B</span>
+                                        </div>
+                                    </label>
+                                    <label class="cursor-pointer">
+                                        <input type="radio" name="kelas_id" value="3" class="hidden peer">
+                                        <div class="peer-checked:border-brand-500 peer-checked:bg-brand-50 peer-checked:text-brand-700 border border-slate-200 rounded-xl p-4 text-center hover:border-brand-300 transition-all">
+                                            <i class="fas fa-school text-lg mb-1 block opacity-50 peer-checked:opacity-100"></i>
+                                            <span class="font-bold text-sm">Kelas 4C</span>
+                                        </div>
+                                    </label>
+                                    <label class="cursor-pointer">
+                                        <input type="radio" name="kelas_id" value="4" class="hidden peer">
+                                        <div class="peer-checked:border-brand-500 peer-checked:bg-brand-50 peer-checked:text-brand-700 border border-slate-200 rounded-xl p-4 text-center hover:border-brand-300 transition-all">
+                                            <i class="fas fa-school text-lg mb-1 block opacity-50 peer-checked:opacity-100"></i>
+                                            <span class="font-bold text-sm">Kelas 4D</span>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Drag & Drop Upload -->
+                            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                                <label class="block text-sm font-semibold text-slate-700 mb-3">
+                                    <i class="fas fa-cloud-upload-alt text-brand-600 mr-2"></i>Upload File Excel
+                                </label>
+                                
+                                <div id="dropZone" class="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center cursor-pointer hover:border-brand-400 hover:bg-brand-50/50 transition-all relative group">
+                                    <input type="file" name="file_excel" id="fileInput" accept=".xlsx,.xls" class="hidden" required>
+                                    
+                                    <div id="uploadPrompt">
+                                        <div class="w-16 h-16 mx-auto bg-slate-100 rounded-full flex items-center justify-center mb-4 group-hover:bg-brand-100 transition-colors">
+                                            <i class="fas fa-file-excel text-slate-400 text-2xl group-hover:text-brand-600 transition-colors"></i>
+                                        </div>
+                                        <p class="font-semibold text-slate-700 mb-1">Klik atau drag & drop file Excel di sini</p>
+                                        <p class="text-sm text-slate-500">Format: .xlsx atau .xls (Maks. 10MB)</p>
+                                        <div class="mt-4">
+                                            <button type="button" class="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 transition-colors shadow-sm shadow-brand-200">
+                                                <i class="fas fa-folder-open mr-2"></i>Pilih File
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div id="fileSelected" class="hidden">
+                                        <div class="flex items-center justify-center gap-4 mb-4">
+                                            <div class="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center">
+                                                <i class="fas fa-file-excel text-emerald-600 text-xl"></i>
+                                            </div>
+                                            <div class="text-left">
+                                                <p id="fileName" class="font-semibold text-slate-800">filename.xlsx</p>
+                                                <p id="fileSize" class="text-xs text-slate-500">0 KB</p>
+                                            </div>
+                                        </div>
+                                        <button type="button" id="removeFile" class="text-sm text-red-500 hover:text-red-600 font-medium">
+                                            <i class="fas fa-trash mr-1"></i>Hapus & Pilih Ulang
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Validation Badge -->
+                                <div id="validationBadge" class="mt-3 hidden">
+                                    <div class="flex items-center gap-2 text-sm">
+                                        <i class="fas fa-check-circle text-emerald-500"></i>
+                                        <span class="text-emerald-600 font-medium">File valid & siap diimport</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="flex flex-col sm:flex-row gap-3">
+                                <button type="submit" id="submitBtn" disabled class="flex-1 py-3 bg-slate-300 text-white rounded-xl font-semibold text-sm transition-all cursor-not-allowed flex items-center justify-center gap-2">
+                                    <i class="fas fa-upload"></i> Proses Import
+                                </button>
+                                <a href="dashboard.php" class="flex-1 py-3 bg-white border border-slate-300 text-slate-700 rounded-xl font-semibold text-sm hover:bg-slate-50 transition-all flex items-center justify-center gap-2">
+                                    <i class="fas fa-arrow-left"></i> Batal
+                                </a>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Sidebar Info -->
+                    <div class="space-y-6">
+                        <!-- Format Mapel -->
+                        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+                            <h3 class="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                <i class="fas fa-list-ol text-brand-600"></i> Format Kolom
+                            </h3>
+                            <div class="space-y-2 text-xs">
+                                <div class="flex justify-between py-2 border-b border-slate-100">
+                                    <span class="text-slate-500">Kolom A-D</span>
+                                    <span class="font-medium text-slate-700">NO, NAMA, NISN, NIS</span>
+                                </div>
+                                <div class="flex justify-between py-2 border-b border-slate-100">
+                                    <span class="text-slate-500">Kolom E</span>
+                                    <span class="font-medium text-slate-700">PAI & Budi Pekerti</span>
+                                </div>
+                                <div class="flex justify-between py-2 border-b border-slate-100">
+                                    <span class="text-slate-500">Kolom F</span>
+                                    <span class="font-medium text-slate-700">PAK & Budi Pekerti</span>
+                                </div>
+                                <div class="flex justify-between py-2 border-b border-slate-100">
+                                    <span class="text-slate-500">Kolom G-J</span>
+                                    <span class="font-medium text-slate-700">PPKn, B.Indo, MTk, IPAS</span>
+                                </div>
+                                <div class="flex justify-between py-2 border-b border-slate-100">
+                                    <span class="text-slate-500">Kolom K-P</span>
+                                    <span class="font-medium text-slate-700">PJOK, B.Ing, Mulok, SBdP</span>
+                                </div>
+                                <div class="flex justify-between py-2 border-b border-slate-100">
+                                    <span class="text-slate-500">Kolom Q-S</span>
+                                    <span class="font-medium text-slate-700">Sakit, Izin, Alpa</span>
+                                </div>
+                                <div class="flex justify-between py-2">
+                                    <span class="text-slate-500">Kolom T</span>
+                                    <span class="font-medium text-slate-700">Ekskul (Pramuka)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Tips -->
+                        <div class="bg-amber-50 rounded-2xl border border-amber-200 p-5">
+                            <h3 class="font-bold text-amber-800 mb-3 flex items-center gap-2">
+                                <i class="fas fa-lightbulb text-amber-600"></i> Tips Import
+                            </h3>
+                            <ul class="space-y-3 text-sm text-amber-900">
+                                <li class="flex items-start gap-2">
+                                    <span class="bg-amber-100 text-amber-600 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-[10px] font-bold">1</span>
+                                    <span>Jika NISN sudah ada di database, data akan di<strong>update</strong> otomatis</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="bg-amber-100 text-amber-600 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-[10px] font-bold">2</span>
+                                    <span>Kosongkan kolom PAKDBP untuk siswa Muslim</span>
+                                </li>
+                                <li class="flex items-start gap-2">
+                                    <span class="bg-amber-100 text-amber-600 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-[10px] font-bold">3</span>
+                                    <span>Pastikan tidak ada baris kosong di antara data siswa</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <!-- Contact Support -->
+                        <div class="bg-slate-800 rounded-2xl p-5 text-white">
+                            <div class="flex items-center gap-3 mb-3">
+                                <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center">
+                                    <i class="fas fa-headset text-accent-400"></i>
+                                </div>
+                                <h3 class="font-bold">Butuh Bantuan?</h3>
+                            </div>
+                            <p class="text-sm text-slate-400 mb-3">Jika mengalami kendala saat import data, silakan hubungi admin.</p>
+                            <button class="w-full py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition-colors border border-white/10">
+                                <i class="fas fa-envelope mr-2"></i>Hubungi Admin
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    // Elements
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const uploadPrompt = document.getElementById('uploadPrompt');
+    const fileSelected = document.getElementById('fileSelected');
+    const fileName = document.getElementById('fileName');
+    const fileSize = document.getElementById('fileSize');
+    const removeFile = document.getElementById('removeFile');
+    const validationBadge = document.getElementById('validationBadge');
+    const submitBtn = document.getElementById('submitBtn');
+
+    // Click to upload
+    dropZone.addEventListener('click', () => {
+        if (!fileSelected.classList.contains('hidden')) return;
+        fileInput.click();
+    });
+
+    // Drag & Drop events
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+    });
+    function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-active'), false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-active'), false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        handleFiles(files);
+    }, false);
+
+    fileInput.addEventListener('change', () => {
+        handleFiles(fileInput.files);
+    });
+
+    function handleFiles(files) {
+        if (files.length === 0) return;
+        const file = files[0];
+
+        // Validation
+        const validTypes = [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel'
+        ];
+        const validExtensions = ['.xlsx', '.xls'];
+        const extension = '.' + file.name.split('.').pop().toLowerCase();
+
+        if (!validTypes.includes(file.type) && !validExtensions.includes(extension)) {
+            alert('Format file tidak valid. Gunakan .xlsx atau .xls');
+            return;
+        }
+
+        if (file.size > 10 * 1024 * 1024) {
+            alert('Ukuran file maksimal 10MB');
+            return;
+        }
+
+        // Show file info
+        fileName.textContent = file.name;
+        fileSize.textContent = (file.size / 1024).toFixed(1) + ' KB';
+
+        uploadPrompt.classList.add('hidden');
+        fileSelected.classList.remove('hidden');
+        validationBadge.classList.remove('hidden');
+
+        // Enable submit button
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('bg-slate-300', 'cursor-not-allowed');
+        submitBtn.classList.add('bg-brand-600', 'hover:bg-brand-700', 'shadow-md', 'shadow-brand-200', 'active:scale-[0.98]');
+    }
+
+    removeFile.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fileInput.value = '';
+        uploadPrompt.classList.remove('hidden');
+        fileSelected.classList.add('hidden');
+        validationBadge.classList.add('hidden');
+        submitBtn.disabled = true;
+        submitBtn.classList.add('bg-slate-300', 'cursor-not-allowed');
+        submitBtn.classList.remove('bg-brand-600', 'hover:bg-brand-700', 'shadow-md', 'shadow-brand-200', 'active:scale-[0.98]');
+    });
+
+    // Submit animation
+    const form = document.getElementById('importForm');
+    form.addEventListener('submit', function(e) {
+        if (submitBtn.disabled) {
+            e.preventDefault();
+            return;
+        }
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
+        submitBtn.disabled = true;
+    });
+</script>
 </body>
 </html>
+
