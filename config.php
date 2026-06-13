@@ -7,7 +7,7 @@ $pass = "123";
 $db   = "db_monitoring_nilai";
 
 $conn = mysqli_connect("localhost", "root", "", "db_monitoring_nilai");
-
+    
 if (!$conn) {
     die("Koneksi gagal: " . mysqli_connect_error());
 }
